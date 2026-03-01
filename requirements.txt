@@ -1,6 +1,4 @@
 python-telegram-bot==21.*
-pytesseract==0.3.*
-Pillow==10.*
 openai==1.*          # xAI Grok uses the OpenAI-compatible API
 msal==1.*            # Azure AD token acquisition
 requests==2.*        # Microsoft Graph API calls

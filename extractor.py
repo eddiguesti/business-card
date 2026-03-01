@@ -1,13 +1,10 @@
-"""Structured contact extraction from OCR text using Grok (xAI).
+"""Business card contact extraction using Grok vision (xAI).
 
-Design note: Tesseract gives us raw text cheaply; Grok handles the messy
-field-parsing work that regex would get wrong (e.g. multi-line addresses,
-phone format variations, LinkedIn vs website distinction).
-
-Grok exposes an OpenAI-compatible API so we use the openai SDK pointed at
-https://api.x.ai/v1.
+Sends the raw image directly to Grok which reads the card AND extracts
+structured fields in a single API call — no Tesseract OCR needed.
 """
 
+import base64
 import json
 import logging
 import re
@@ -23,27 +20,41 @@ _client = OpenAI(
     base_url="https://api.x.ai/v1",
 )
 
-_SYSTEM = (
-    "You are a contact-data extractor. Given raw OCR text from a business card, "
+_PROMPT = (
+    "This is a photo of a business card. Read all the text on the card and "
     "return a single JSON object with these exact keys: "
     "name, email, phone, company, title, address, website, notes. "
     "email and phone must be JSON arrays (possibly empty). "
     "All other fields are strings or null. "
-    "Sanitize values: trim whitespace, normalise phone numbers to E.164 where possible. "
+    "Trim whitespace from all values. "
     "Return only the JSON object — no markdown, no explanation."
 )
 
 
-def extract_contact(ocr_text: str) -> dict:
-    """Parse OCR text into a structured contact dict via Grok."""
+def extract_contact(image_bytes: bytes) -> dict:
+    """Send image to Grok vision; returns a structured contact dict."""
+    image_b64 = base64.b64encode(image_bytes).decode()
+
     response = _client.chat.completions.create(
-        model="grok-4-1-fast-reasoning",
+        model="grok-2-vision-latest",
         messages=[
-            {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": ocr_text},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_b64}",
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": _PROMPT,
+                    },
+                ],
+            }
         ],
         max_tokens=512,
-        temperature=0,
     )
 
     raw = response.choices[0].message.content.strip()

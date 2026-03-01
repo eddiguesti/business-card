@@ -23,7 +23,6 @@ import config
 from database import get_user, init_db, register_user, upsert_contact
 from email_sender import send_follow_up
 from extractor import extract_contact
-from ocr import extract_text
 
 logging.basicConfig(
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
@@ -137,21 +136,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await tg_file.download_to_memory(buf)
     image_bytes = buf.getvalue()
 
-    # OCR
+    # Extract contact directly from image via Grok vision (single API call)
     try:
-        ocr_text = extract_text(image_bytes)
-    except Exception as exc:
-        logger.error("OCR failed: %s", exc)
-        await update.message.reply_text("OCR failed — please send a clearer image.")
-        return
-
-    if not ocr_text:
-        await update.message.reply_text("No text detected. Try a higher-quality photo.")
-        return
-
-    # Structured extraction
-    try:
-        contact = extract_contact(ocr_text)
+        contact = extract_contact(image_bytes)
     except Exception as exc:
         logger.error("Extraction failed: %s", exc)
         await update.message.reply_text("Could not extract contact info. Please try again.")
