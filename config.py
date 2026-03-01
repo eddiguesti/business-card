@@ -20,7 +20,7 @@ AZURE_CLIENT_SECRET = _require("AZURE_CLIENT_SECRET")
 
 # Azure Document Intelligence
 AZURE_DOC_INTEL_ENDPOINT = _require("AZURE_DOC_INTEL_ENDPOINT")
-AZURE_DOC_INTEL_KEY = _require("AZURE_DOC_INTEL_KEY")
+AZURE_DOC_INTEL_KEY = _require("AZURE_DOC_INTEL_CRED")
 
 # Only this domain may register and use the bot
 ALLOWED_DOMAIN = os.getenv("ALLOWED_DOMAIN", "jengu.ai")
