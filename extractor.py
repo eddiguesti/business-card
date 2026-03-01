@@ -5,6 +5,7 @@ with an API key — no IAM role assignment required.
 """
 
 import logging
+import re
 
 from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.core.credentials import AzureKeyCredential
@@ -12,6 +13,73 @@ from azure.core.credentials import AzureKeyCredential
 from config import AZURE_DOC_INTEL_ENDPOINT, AZURE_DOC_INTEL_KEY
 
 logger = logging.getLogger(__name__)
+
+_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+
+
+def _extract_domain(website: str) -> str:
+    """Parse the domain (without www.) from a website string.
+
+    Examples:
+        "www.jengu.ai"      → "jengu.ai"
+        "https://jengu.ai"  → "jengu.ai"
+        "jengu.ai/about"    → "jengu.ai"
+    """
+    if not website:
+        return ""
+    # Strip scheme
+    domain = re.sub(r"^https?://", "", website.strip().lower())
+    # Strip path/query
+    domain = domain.split("/")[0].split("?")[0]
+    # Strip www.
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain
+
+
+def _domain_base(domain: str) -> str:
+    """Return the domain without the TLD (e.g. 'jengu.ai' → 'jengu')."""
+    parts = domain.rsplit(".", 1)
+    return parts[0] if len(parts) == 2 else domain
+
+
+def _fix_email_domains(emails: list[str], website_domain: str) -> list[str]:
+    """Correct email domains that look like OCR typos of the website domain.
+
+    Strategy:
+    - If the email's domain base name matches the website's domain base name
+      (case-insensitive, e.g. 'jengu' == 'jengu') but the TLD differs
+      (e.g. '.al' vs '.ai'), replace the email domain with the website domain.
+    - Also re-extracts any email buried inside a garbled string (e.g.
+      Azure DI sometimes returns "john@co .com" with a stray space).
+    """
+    if not website_domain or not emails:
+        return emails
+
+    site_base = _domain_base(website_domain)
+    fixed = []
+    for email in emails:
+        # Attempt to re-parse in case there are embedded spaces or junk
+        clean = "".join(email.split())  # strip all whitespace
+        m = _EMAIL_RE.search(clean)
+        email = m.group(0).lower() if m else email.lower()
+
+        local, _, email_domain = email.rpartition("@")
+        if not local:
+            fixed.append(email)
+            continue
+
+        email_base = _domain_base(email_domain)
+        if email_base == site_base and email_domain != website_domain:
+            corrected = f"{local}@{website_domain}"
+            logger.info(
+                "Corrected email domain: %s → %s (website: %s)",
+                email, corrected, website_domain,
+            )
+            fixed.append(corrected)
+        else:
+            fixed.append(email)
+    return fixed
 
 
 def _make_client() -> DocumentAnalysisClient:
@@ -75,6 +143,11 @@ def extract_contact(image_bytes: bytes) -> dict:
     titles = _array_strings(fields, "JobTitles")
     addresses = _array_strings(fields, "Addresses")
     websites = _array_strings(fields, "Websites")
+
+    # Use the website as ground truth to fix OCR typos in email domains
+    # (e.g. "jengu.al" → "jengu.ai" when website is "www.jengu.ai")
+    website_domain = _extract_domain(websites[0]) if websites else ""
+    emails = _fix_email_domains(emails, website_domain)
 
     contact = {
         "name": name,

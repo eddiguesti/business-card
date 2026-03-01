@@ -153,36 +153,32 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     summary = _format_contact(contact)
     has_email = bool(contact.get("email"))
 
+    _pending[telegram_user.id] = contact
+
     if not has_email:
-        # No email on the card — ask user to enter one manually
-        _pending[telegram_user.id] = contact
         keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Enter email manually", callback_data="enter_email")],
             [
-                InlineKeyboardButton("Enter email manually", callback_data="enter_email"),
-                InlineKeyboardButton("Skip", callback_data="skip_send"),
-            ]
+                InlineKeyboardButton("✓ Save without email", callback_data="skip_send"),
+                InlineKeyboardButton("✗ Discard", callback_data="discard_contact"),
+            ],
         ])
         await update.message.reply_text(
-            f"{summary}\n\nNo email found on this card — enter one manually or skip?",
-            reply_markup=keyboard,
-        )
-    elif config.CONFIRM_BEFORE_SEND:
-        _pending[telegram_user.id] = contact
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("Send email", callback_data="confirm_send"),
-                InlineKeyboardButton("Skip email", callback_data="skip_send"),
-            ]
-        ])
-        await update.message.reply_text(
-            f"{summary}\n\nSend follow-up from {user['email']}?",
+            f"{summary}\n\nDo these details look correct?\n(No email found on card)",
             reply_markup=keyboard,
         )
     else:
-        contact_id, is_new = upsert_contact(contact, owner_telegram_id=telegram_user.id)
-        db_status = "New contact saved" if is_new else "Existing contact updated"
-        email_status = _do_send(contact, from_email=user["email"], from_name=user["display_name"])
-        await update.message.reply_text(f"{summary}\n\n{db_status}. {email_status}")
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✓ Correct — Save & Send follow-up", callback_data="confirm_send")],
+            [
+                InlineKeyboardButton("Save, skip email", callback_data="skip_send"),
+                InlineKeyboardButton("✗ Discard", callback_data="discard_contact"),
+            ],
+        ])
+        await update.message.reply_text(
+            f"{summary}\n\nDo these details look correct?",
+            reply_markup=keyboard,
+        )
 
 
 async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -195,6 +191,10 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if not contact:
         await query.edit_message_text("Session expired — please resend the photo.")
+        return
+
+    if query.data == "discard_contact":
+        await query.edit_message_text("Contact discarded — nothing saved.")
         return
 
     if query.data == "enter_email":
@@ -266,11 +266,11 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
     app.add_handler(CallbackQueryHandler(
-        handle_confirm, pattern=r"^(confirm|skip)_send$|^enter_email$"
+        handle_confirm, pattern=r"^(confirm|skip)_send$|^enter_email$|^discard_contact$"
     ))
     app.add_error_handler(handle_error)
 
-    logger.info("Bot polling (CONFIRM_BEFORE_SEND=%s)", config.CONFIRM_BEFORE_SEND)
+    logger.info("Bot polling — confirmation always required before saving")
     app.run_polling()
 
 
