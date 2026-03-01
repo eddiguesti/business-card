@@ -4,32 +4,21 @@ Uses the prebuilt-businessCard model with the existing Azure AD app credentials
 (same AZURE_TENANT_ID / CLIENT_ID / CLIENT_SECRET used for email sending).
 """
 
-import base64
 import logging
 
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
-from azure.identity import ClientSecretCredential
+from azure.core.credentials import AzureKeyCredential
 
-from config import (
-    AZURE_CLIENT_ID,
-    AZURE_CLIENT_SECRET,
-    AZURE_DOC_INTEL_ENDPOINT,
-    AZURE_TENANT_ID,
-)
+from config import AZURE_DOC_INTEL_ENDPOINT, AZURE_DOC_INTEL_KEY
 
 logger = logging.getLogger(__name__)
 
 
 def _make_client() -> DocumentIntelligenceClient:
-    credential = ClientSecretCredential(
-        tenant_id=AZURE_TENANT_ID,
-        client_id=AZURE_CLIENT_ID,
-        client_secret=AZURE_CLIENT_SECRET,
-    )
     return DocumentIntelligenceClient(
         endpoint=AZURE_DOC_INTEL_ENDPOINT,
-        credential=credential,
+        credential=AzureKeyCredential(AZURE_DOC_INTEL_KEY),
     )
 
 
@@ -54,7 +43,7 @@ def extract_contact(image_bytes: bytes) -> dict:
 
     poller = client.begin_analyze_document(
         "prebuilt-businessCard",
-        AnalyzeDocumentRequest(base64_source=base64.b64encode(image_bytes).decode()),
+        AnalyzeDocumentRequest(bytes_source=image_bytes),
     )
     result = poller.result()
 
