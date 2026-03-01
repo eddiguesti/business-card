@@ -1,80 +1,106 @@
-"""Business card contact extraction using Grok vision (xAI).
+"""Business card contact extraction using Azure Document Intelligence.
 
-Sends the raw image directly to Grok which reads the card AND extracts
-structured fields in a single API call — no Tesseract OCR needed.
+Uses the prebuilt-businessCard model with the existing Azure AD app credentials
+(same AZURE_TENANT_ID / CLIENT_ID / CLIENT_SECRET used for email sending).
 """
 
 import base64
-import json
 import logging
-import re
 
-from openai import OpenAI
+from azure.ai.documentintelligence import DocumentIntelligenceClient
+from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
+from azure.identity import ClientSecretCredential
 
-from config import XAI_API_KEY
+from config import (
+    AZURE_CLIENT_ID,
+    AZURE_CLIENT_SECRET,
+    AZURE_DOC_INTEL_ENDPOINT,
+    AZURE_TENANT_ID,
+)
 
 logger = logging.getLogger(__name__)
 
-_client = OpenAI(
-    api_key=XAI_API_KEY,
-    base_url="https://api.x.ai/v1",
-)
 
-_PROMPT = (
-    "This is a photo of a business card. Read every character carefully, "
-    "including small print. "
-    "Pay special attention to any text containing '@' — that is an email address. "
-    "Return a single JSON object with these exact keys: "
-    "name, email, phone, company, title, address, website, notes. "
-    "email and phone must be JSON arrays (possibly empty). "
-    "All other fields are strings or null. "
-    "Trim whitespace from all values. "
-    "Return only the JSON object — no markdown, no explanation."
-)
+def _make_client() -> DocumentIntelligenceClient:
+    credential = ClientSecretCredential(
+        tenant_id=AZURE_TENANT_ID,
+        client_id=AZURE_CLIENT_ID,
+        client_secret=AZURE_CLIENT_SECRET,
+    )
+    return DocumentIntelligenceClient(
+        endpoint=AZURE_DOC_INTEL_ENDPOINT,
+        credential=credential,
+    )
+
+
+def _str_val(field) -> str:
+    """Pull a plain string out of a DocumentField regardless of its type."""
+    if not field:
+        return ""
+    return (field.value_string or field.value_phone_number or field.content or "").strip()
+
+
+def _array_strings(fields: dict, key: str) -> list[str]:
+    """Return all non-empty strings from an array-type DocumentField."""
+    field = fields.get(key)
+    if not field or not field.value_array:
+        return []
+    return [v for item in field.value_array if (v := _str_val(item))]
 
 
 def extract_contact(image_bytes: bytes) -> dict:
-    """Send image to Grok vision; returns a structured contact dict."""
-    image_b64 = base64.b64encode(image_bytes).decode()
+    """Analyse a business card image; returns a structured contact dict."""
+    client = _make_client()
 
-    response = _client.chat.completions.create(
-        model="grok-4-1-fast-non-reasoning",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{image_b64}",
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": _PROMPT,
-                    },
-                ],
-            }
-        ],
-        max_tokens=512,
+    poller = client.begin_analyze_document(
+        "prebuilt-businessCard",
+        AnalyzeDocumentRequest(base64_source=base64.b64encode(image_bytes).decode()),
     )
+    result = poller.result()
 
-    raw = response.choices[0].message.content.strip()
+    if not result.documents:
+        logger.warning("Document Intelligence found no business card in image")
+        return {
+            "name": None, "email": [], "phone": [],
+            "company": None, "title": None, "address": None,
+            "website": None, "notes": None,
+        }
 
-    # Strip accidental markdown code fences
-    raw = re.sub(r"^```(?:json)?\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
+    fields = result.documents[0].fields or {}
 
-    try:
-        contact = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        logger.error("Grok returned non-JSON: %s", raw[:200])
-        raise ValueError("Failed to parse contact JSON from Grok response") from exc
+    # ContactNames is an array of objects: {FirstName, MiddleName, LastName}
+    name = None
+    cn_field = fields.get("ContactNames")
+    if cn_field and cn_field.value_array:
+        obj = cn_field.value_array[0].value_object or {}
+        parts = [
+            _str_val(obj.get(k))
+            for k in ("FirstName", "MiddleName", "LastName")
+            if _str_val(obj.get(k))
+        ]
+        name = " ".join(parts) or None
 
-    # Ensure list fields are actually lists
-    for field in ("email", "phone"):
-        if not isinstance(contact.get(field), list):
-            contact[field] = [contact[field]] if contact.get(field) else []
+    emails = _array_strings(fields, "Emails")
+    phones = (
+        _array_strings(fields, "MobilePhones")
+        + _array_strings(fields, "WorkPhones")
+        + _array_strings(fields, "OtherPhones")
+    )
+    companies = _array_strings(fields, "CompanyNames")
+    titles = _array_strings(fields, "JobTitles")
+    addresses = _array_strings(fields, "Addresses")
+    websites = _array_strings(fields, "Websites")
+
+    contact = {
+        "name": name,
+        "email": emails,
+        "phone": phones,
+        "company": companies[0] if companies else None,
+        "title": titles[0] if titles else None,
+        "address": addresses[0] if addresses else None,
+        "website": websites[0] if websites else None,
+        "notes": None,
+    }
 
     logger.info(
         "Extracted contact: name=%r, emails=%s",

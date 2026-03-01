@@ -1,5 +1,6 @@
 python-telegram-bot==21.*
-openai==1.*          # xAI Grok uses the OpenAI-compatible API
-msal==1.*            # Azure AD token acquisition
-requests==2.*        # Microsoft Graph API calls
+azure-ai-documentintelligence==1.*   # prebuilt-businessCard model
+azure-identity==1.*                  # ClientSecretCredential for Azure AD auth
+msal==1.*                            # Azure AD token acquisition (email sending)
+requests==2.*                        # Microsoft Graph API calls
 python-dotenv==1.*

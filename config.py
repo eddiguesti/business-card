@@ -12,12 +12,14 @@ def _require(key: str) -> str:
 
 
 TELEGRAM_TOKEN = _require("TELEGRAM_TOKEN")
-XAI_API_KEY = _require("XAI_API_KEY")
 
-# Azure Graph API (for sending email from @jengu.ai mailboxes)
+# Azure AD app (shared by email sending and Document Intelligence)
 AZURE_TENANT_ID = _require("AZURE_TENANT_ID")
 AZURE_CLIENT_ID = _require("AZURE_CLIENT_ID")
 AZURE_CLIENT_SECRET = _require("AZURE_CLIENT_SECRET")
+
+# Azure Document Intelligence endpoint (e.g. https://xxx.cognitiveservices.azure.com/)
+AZURE_DOC_INTEL_ENDPOINT = _require("AZURE_DOC_INTEL_ENDPOINT")
 
 # Only this domain may register and use the bot
 ALLOWED_DOMAIN = os.getenv("ALLOWED_DOMAIN", "jengu.ai")
