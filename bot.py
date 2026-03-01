@@ -2,7 +2,7 @@
 
 Multi-user flow:
   1. Each user registers once: /register chris@jengu.ai
-  2. User sends a photo → OCR → Grok extraction → DB upsert (tagged to owner)
+  2. User sends a photo → Grok vision extracts contact → DB upsert (tagged to owner)
   3. Follow-up email sent from the owner's @jengu.ai address via Azure Graph
 """
 
@@ -10,6 +10,7 @@ import io
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import Conflict
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -30,8 +31,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Pending contacts awaiting confirmation {user_id: contact_dict}
+# Contacts waiting for confirm/skip button {user_id: contact_dict}
 _pending: dict[int, dict] = {}
+# Contacts waiting for the user to type an email address {user_id: contact_dict}
+_awaiting_email: dict[int, dict] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +51,8 @@ def _format_contact(c: dict) -> str:
         lines.append(f"Company: {c['company']}")
     if c.get("email"):
         lines.append(f"Email:   {', '.join(c['email'])}")
+    else:
+        lines.append("Email:   (none found)")
     if c.get("phone"):
         lines.append(f"Phone:   {', '.join(c['phone'])}")
     if c.get("website"):
@@ -62,7 +67,7 @@ def _format_contact(c: dict) -> str:
 def _do_send(contact: dict, from_email: str, from_name: str) -> str:
     emails = contact.get("email") or []
     if not emails:
-        return "No email address found — skipped."
+        return "No email address — skipped."
     sent = send_follow_up(contact, from_email=from_email, from_name=from_name)
     return f"Follow-up sent to {emails[0]}." if sent else f"Email to {emails[0]} failed."
 
@@ -145,8 +150,22 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     summary = _format_contact(contact)
+    has_email = bool(contact.get("email"))
 
-    if config.CONFIRM_BEFORE_SEND:
+    if not has_email:
+        # No email on the card — ask user to enter one manually
+        _pending[telegram_user.id] = contact
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Enter email manually", callback_data="enter_email"),
+                InlineKeyboardButton("Skip", callback_data="skip_send"),
+            ]
+        ])
+        await update.message.reply_text(
+            f"{summary}\n\nNo email found on this card — enter one manually or skip?",
+            reply_markup=keyboard,
+        )
+    elif config.CONFIRM_BEFORE_SEND:
         _pending[telegram_user.id] = contact
         keyboard = InlineKeyboardMarkup([
             [
@@ -177,6 +196,14 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.edit_message_text("Session expired — please resend the photo.")
         return
 
+    if query.data == "enter_email":
+        # Move contact to awaiting-email state without saving to DB yet
+        _awaiting_email[telegram_user.id] = contact
+        await query.edit_message_text(
+            f"{_format_contact(contact)}\n\nType the email address to send the follow-up to:"
+        )
+        return
+
     contact_id, is_new = upsert_contact(contact, owner_telegram_id=telegram_user.id)
     db_status = "New contact saved" if is_new else "Existing contact updated"
 
@@ -185,6 +212,41 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.edit_message_text(f"{db_status}. {email_status}")
     else:
         await query.edit_message_text(f"{db_status}. Email skipped.")
+
+
+async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles the manual email address typed by the user after 'Enter email manually'."""
+    telegram_user = update.effective_user
+    contact = _awaiting_email.get(telegram_user.id)
+
+    if not contact:
+        return  # Not in email-input state — ignore the text
+
+    email = update.message.text.strip()
+
+    # Basic email validation
+    if "@" not in email or "." not in email.split("@")[-1]:
+        await update.message.reply_text(
+            f"'{email}' doesn't look like a valid email address. Please try again:"
+        )
+        return
+
+    _awaiting_email.pop(telegram_user.id)
+    contact["email"] = [email]
+
+    user = _get_registered_user(telegram_user.id)
+    contact_id, is_new = upsert_contact(contact, owner_telegram_id=telegram_user.id)
+    db_status = "New contact saved" if is_new else "Existing contact updated"
+    email_status = _do_send(contact, from_email=user["email"], from_name=user["display_name"])
+    await update.message.reply_text(f"{db_status}. {email_status}")
+
+
+async def handle_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Suppress expected 409 Conflict during deployments; log everything else."""
+    if isinstance(context.error, Conflict):
+        logger.warning("Telegram 409 conflict (deployment overlap) — will recover automatically.")
+        return
+    logger.error("Unhandled error", exc_info=context.error)
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +260,11 @@ def main() -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("register", cmd_register))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(CallbackQueryHandler(handle_confirm, pattern=r"^(confirm|skip)_send$"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
+    app.add_handler(CallbackQueryHandler(
+        handle_confirm, pattern=r"^(confirm|skip)_send$|^enter_email$"
+    ))
+    app.add_error_handler(handle_error)
 
     logger.info("Bot polling (CONFIRM_BEFORE_SEND=%s)", config.CONFIRM_BEFORE_SEND)
     app.run_polling()
