@@ -36,7 +36,7 @@ def extract_contact(image_bytes: bytes) -> dict:
     image_b64 = base64.b64encode(image_bytes).decode()
 
     response = _client.chat.completions.create(
-        model="grok-2-vision-latest",
+        model="grok-4-1-fast-non-reasoning",
         messages=[
             {
                 "role": "user",
