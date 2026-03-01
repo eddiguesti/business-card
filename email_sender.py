@@ -72,17 +72,31 @@ def send_follow_up(contact: dict, from_email: str, from_name: str) -> bool:
         title=contact.get("title") or "",
     )
 
-    # Convert plain text to HTML paragraphs, auto-linking any URLs, then append signature
+    # Convert plain text to styled HTML paragraphs, auto-linking any URLs, then append signature
     import re as _re
     _url_re = _re.compile(r'(https?://\S+)')
 
-    def _line_to_html(line: str) -> str:
-        if not line.strip():
-            return "<p>&nbsp;</p>"
-        linked = _url_re.sub(r'<a href="\1" target="_blank">\1</a>', line)
-        return f"<p>{linked}</p>"
+    _LINK_STYLE = "color:#054E88;text-decoration:none;font-weight:500;"
+    _P_STYLE = "margin:0 0 14px 0;"
 
-    html_body = "".join(_line_to_html(line) for line in plain_body.splitlines())
+    paragraphs = []
+    for line in plain_body.splitlines():
+        if not line.strip():
+            paragraphs.append(f'<p style="{_P_STYLE}">&nbsp;</p>')
+        else:
+            linked = _url_re.sub(
+                rf'<a href="\1" target="_blank" style="{_LINK_STYLE}">\1</a>', line
+            )
+            paragraphs.append(f'<p style="{_P_STYLE}">{linked}</p>')
+
+    html_body = (
+        '<div style="'
+        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;"
+        "font-size:15px;line-height:1.65;color:#1a1a1a;max-width:600px;"
+        '">'
+        + "".join(paragraphs)
+        + "</div>"
+    )
     html_body += _load_signature(from_email)
 
     payload = {
