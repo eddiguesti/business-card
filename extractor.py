@@ -21,8 +21,10 @@ _client = OpenAI(
 )
 
 _PROMPT = (
-    "This is a photo of a business card. Read all the text on the card and "
-    "return a single JSON object with these exact keys: "
+    "This is a photo of a business card. Read every character carefully, "
+    "including small print. "
+    "Pay special attention to any text containing '@' — that is an email address. "
+    "Return a single JSON object with these exact keys: "
     "name, email, phone, company, title, address, website, notes. "
     "email and phone must be JSON arrays (possibly empty). "
     "All other fields are strings or null. "

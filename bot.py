@@ -8,6 +8,7 @@ Multi-user flow:
 
 import io
 import logging
+import re
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import Conflict
@@ -214,6 +215,9 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.edit_message_text(f"{db_status}. Email skipped.")
 
 
+_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+
+
 async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the manual email address typed by the user after 'Enter email manually'."""
     telegram_user = update.effective_user
@@ -222,15 +226,15 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not contact:
         return  # Not in email-input state — ignore the text
 
-    email = update.message.text.strip()
-
-    # Basic email validation
-    if "@" not in email or "." not in email.split("@")[-1]:
+    # Extract email from whatever the user typed (e.g. "his email is john@co.com" works)
+    match = _EMAIL_RE.search(update.message.text)
+    if not match:
         await update.message.reply_text(
-            f"'{email}' doesn't look like a valid email address. Please try again:"
+            "Couldn't find an email address in that. Please type it again:"
         )
         return
 
+    email = match.group(0).lower()
     _awaiting_email.pop(telegram_user.id)
     contact["email"] = [email]
 
