@@ -1,13 +1,12 @@
 """Business card contact extraction using Azure Document Intelligence.
 
-Uses the prebuilt-businessCard model with the existing Azure AD app credentials
-(same AZURE_TENANT_ID / CLIENT_ID / CLIENT_SECRET used for email sending).
+Uses the prebuilt-businessCard model via azure-ai-formrecognizer (v3.1 API)
+with an API key — no IAM role assignment required.
 """
 
 import logging
 
-from azure.ai.documentintelligence import DocumentIntelligenceClient
-from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
+from azure.ai.formrecognizer import DocumentAnalysisClient
 from azure.core.credentials import AzureKeyCredential
 
 from config import AZURE_DOC_INTEL_ENDPOINT, AZURE_DOC_INTEL_KEY
@@ -15,36 +14,33 @@ from config import AZURE_DOC_INTEL_ENDPOINT, AZURE_DOC_INTEL_KEY
 logger = logging.getLogger(__name__)
 
 
-def _make_client() -> DocumentIntelligenceClient:
-    return DocumentIntelligenceClient(
+def _make_client() -> DocumentAnalysisClient:
+    return DocumentAnalysisClient(
         endpoint=AZURE_DOC_INTEL_ENDPOINT,
         credential=AzureKeyCredential(AZURE_DOC_INTEL_KEY),
     )
 
 
-def _str_val(field) -> str:
-    """Pull a plain string out of a DocumentField regardless of its type."""
+def _field_str(field) -> str:
+    """Get string value from a DocumentField, falling back to content."""
     if not field:
         return ""
-    return (field.value_string or field.value_phone_number or field.content or "").strip()
+    return (str(field.value) if field.value else field.content or "").strip()
 
 
 def _array_strings(fields: dict, key: str) -> list[str]:
-    """Return all non-empty strings from an array-type DocumentField."""
+    """Return all non-empty string values from an array-type DocumentField."""
     field = fields.get(key)
-    if not field or not field.value_array:
+    if not field or not field.value:
         return []
-    return [v for item in field.value_array if (v := _str_val(item))]
+    return [v for item in field.value if (v := _field_str(item))]
 
 
 def extract_contact(image_bytes: bytes) -> dict:
     """Analyse a business card image; returns a structured contact dict."""
     client = _make_client()
 
-    poller = client.begin_analyze_document(
-        "prebuilt-businessCard",
-        AnalyzeDocumentRequest(bytes_source=image_bytes),
-    )
+    poller = client.begin_analyze_document("prebuilt-businessCard", document=image_bytes)
     result = poller.result()
 
     if not result.documents:
@@ -57,15 +53,15 @@ def extract_contact(image_bytes: bytes) -> dict:
 
     fields = result.documents[0].fields or {}
 
-    # ContactNames is an array of objects: {FirstName, MiddleName, LastName}
+    # ContactNames is an array of objects with FirstName / MiddleName / LastName sub-fields
     name = None
     cn_field = fields.get("ContactNames")
-    if cn_field and cn_field.value_array:
-        obj = cn_field.value_array[0].value_object or {}
+    if cn_field and cn_field.value:
+        obj = cn_field.value[0].value or {}  # dict of sub-fields
         parts = [
-            _str_val(obj.get(k))
+            _field_str(obj.get(k))
             for k in ("FirstName", "MiddleName", "LastName")
-            if _str_val(obj.get(k))
+            if _field_str(obj.get(k))
         ]
         name = " ".join(parts) or None
 

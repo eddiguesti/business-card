@@ -1,5 +1,5 @@
 python-telegram-bot==21.*
-azure-ai-documentintelligence==1.*   # prebuilt-businessCard model
+azure-ai-formrecognizer==3.*          # prebuilt-businessCard model (v3.1 API)
 msal==1.*                            # Azure AD token acquisition (email sending)
 requests==2.*                        # Microsoft Graph API calls
 python-dotenv==1.*
