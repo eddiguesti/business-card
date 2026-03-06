@@ -164,6 +164,17 @@ def upsert_contact(contact: dict, owner_telegram_id: int) -> tuple[int, bool]:
             return new_id, True
 
 
+def get_contacts(owner_telegram_id: int) -> list[dict]:
+    """Return all contacts for a given owner, newest first."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM contacts WHERE owner_telegram_id = ? ORDER BY created_at DESC",
+            (owner_telegram_id,),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+
 def get_contact(contact_id: int) -> Optional[dict]:
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row

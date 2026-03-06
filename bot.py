@@ -22,7 +22,7 @@ from telegram.ext import (
 )
 
 import config
-from database import get_user, init_db, register_user, upsert_contact
+from database import get_contacts, get_user, init_db, register_user, upsert_contact
 from email_sender import send_follow_up
 from extractor import extract_contact
 
@@ -121,6 +121,29 @@ async def cmd_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"Registered! Follow-up emails will be sent from {email}.\n\n"
         "Send me a photo of a business card."
     )
+
+
+async def cmd_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Usage: /contacts — list all your saved contacts."""
+    telegram_user = update.effective_user
+    user = _get_registered_user(telegram_user.id)
+    if not user:
+        await update.message.reply_text("You need to register first:\n  /register your@jengu.ai")
+        return
+
+    contacts = get_contacts(telegram_user.id)
+    if not contacts:
+        await update.message.reply_text("No contacts saved yet — send a business card photo to get started.")
+        return
+
+    lines = [f"Your contacts ({len(contacts)}):\n"]
+    for c in contacts:
+        name = c.get("name") or "Unknown"
+        email = c["email"][0] if c.get("email") else "no email"
+        company = f" — {c['company']}" if c.get("company") else ""
+        lines.append(f"• {name}{company}\n  {email}")
+
+    await update.message.reply_text("\n".join(lines))
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -263,6 +286,7 @@ def main() -> None:
     app = Application.builder().token(config.TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("register", cmd_register))
+    app.add_handler(CommandHandler("contacts", cmd_contacts))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
     app.add_handler(CallbackQueryHandler(
