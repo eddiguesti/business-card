@@ -6,6 +6,7 @@ Multi-user flow:
   3. Follow-up email sent from the owner's @jengu.ai address via Azure Graph
 """
 
+import csv
 import io
 import logging
 import re
@@ -144,6 +145,40 @@ async def cmd_contacts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         lines.append(f"• {name}{company}\n  {email}")
 
     await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Usage: /export — download all your contacts as a CSV file."""
+    telegram_user = update.effective_user
+    user = _get_registered_user(telegram_user.id)
+    if not user:
+        await update.message.reply_text("You need to register first:\n  /register your@jengu.ai")
+        return
+
+    contacts = get_contacts(telegram_user.id)
+    if not contacts:
+        await update.message.reply_text("No contacts saved yet.")
+        return
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Name", "Email", "Phone", "Company", "Title", "Website", "Address", "Saved At"])
+    for c in contacts:
+        writer.writerow([
+            c.get("name") or "",
+            ", ".join(c.get("email") or []),
+            ", ".join(c.get("phone") or []),
+            c.get("company") or "",
+            c.get("title") or "",
+            c.get("website") or "",
+            c.get("address") or "",
+            c.get("created_at") or "",
+        ])
+
+    file_bytes = io.BytesIO(buf.getvalue().encode("utf-8"))
+    file_bytes.name = f"contacts_{user['email'].split('@')[0]}.csv"
+    await update.message.reply_document(document=file_bytes, filename=file_bytes.name,
+                                        caption=f"{len(contacts)} contacts exported.")
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -287,6 +322,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("register", cmd_register))
     app.add_handler(CommandHandler("contacts", cmd_contacts))
+    app.add_handler(CommandHandler("export", cmd_export))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
     app.add_handler(CallbackQueryHandler(
