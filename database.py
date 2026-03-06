@@ -37,11 +37,16 @@ def init_db() -> None:
                 address           TEXT,
                 website           TEXT,
                 notes             TEXT,
+                photo             BLOB,
                 created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (owner_telegram_id) REFERENCES users(telegram_id)
             )
         """)
+        # Migrate existing DB — add photo column if missing
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(contacts)")}
+        if "photo" not in cols:
+            conn.execute("ALTER TABLE contacts ADD COLUMN photo BLOB")
         conn.commit()
     logger.info("Database initialised at %s", DB_PATH)
 
@@ -123,7 +128,15 @@ def find_duplicate(contact: dict, owner_telegram_id: int) -> Optional[int]:
     return None
 
 
-def upsert_contact(contact: dict, owner_telegram_id: int) -> tuple[int, bool]:
+def get_contact_photo(contact_id: int) -> Optional[bytes]:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT photo FROM contacts WHERE id = ?", (contact_id,)
+        ).fetchone()
+        return row[0] if row else None
+
+
+def upsert_contact(contact: dict, owner_telegram_id: int, photo_bytes: Optional[bytes] = None) -> tuple[int, bool]:
     """Insert or merge contact for a specific owner. Returns (id, is_new)."""
     existing_id = find_duplicate(contact, owner_telegram_id)
 
@@ -141,10 +154,11 @@ def upsert_contact(contact: dict, owner_telegram_id: int) -> tuple[int, bool]:
                     address = COALESCE(?, address),
                     website = COALESCE(?, website),
                     notes   = COALESCE(?, notes),
+                    photo   = COALESCE(?, photo),
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (name, email, phone, company, title, address, website, notes, existing_id),
+                (name, email, phone, company, title, address, website, notes, photo_bytes, existing_id),
             )
             conn.commit()
             logger.info("Updated existing contact id=%s (owner=%s)", existing_id, owner_telegram_id)
@@ -153,10 +167,10 @@ def upsert_contact(contact: dict, owner_telegram_id: int) -> tuple[int, bool]:
             cursor = conn.execute(
                 """
                 INSERT INTO contacts
-                    (owner_telegram_id, name, email, phone, company, title, address, website, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (owner_telegram_id, name, email, phone, company, title, address, website, notes, photo)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (owner_telegram_id, *_encode(contact)),
+                (owner_telegram_id, *_encode(contact), photo_bytes),
             )
             conn.commit()
             new_id = cursor.lastrowid

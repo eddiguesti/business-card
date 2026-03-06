@@ -23,7 +23,7 @@ from telegram.ext import (
 )
 
 import config
-from database import get_contacts, get_user, init_db, register_user, upsert_contact
+from database import get_contact_photo, get_contacts, get_user, init_db, register_user, upsert_contact
 from email_sender import send_follow_up
 from extractor import extract_contact
 
@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 _pending: dict[int, dict] = {}
 # Contacts waiting for the user to type an email address {user_id: contact_dict}
 _awaiting_email: dict[int, dict] = {}
+# Card image bytes held until contact is saved or discarded {user_id: bytes}
+_photos: dict[int, bytes] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +182,17 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_document(document=file_bytes, filename=file_bytes.name,
                                         caption=f"{len(contacts)} contacts exported.")
 
+    # Send stored card photos
+    for c in contacts:
+        photo_data = get_contact_photo(c["id"])
+        if photo_data:
+            name = c.get("name") or "Unknown"
+            company = f" — {c['company']}" if c.get("company") else ""
+            await update.message.reply_photo(
+                photo=io.BytesIO(photo_data),
+                caption=f"{name}{company}",
+            )
+
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     telegram_user = update.effective_user
@@ -212,6 +225,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     has_email = bool(contact.get("email"))
 
     _pending[telegram_user.id] = contact
+    _photos[telegram_user.id] = image_bytes
 
     if not has_email:
         keyboard = InlineKeyboardMarkup([
@@ -252,6 +266,7 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if query.data == "discard_contact":
+        _photos.pop(telegram_user.id, None)
         await query.edit_message_text("Contact discarded — nothing saved.")
         return
 
@@ -263,7 +278,8 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    contact_id, is_new = upsert_contact(contact, owner_telegram_id=telegram_user.id)
+    photo = _photos.pop(telegram_user.id, None)
+    contact_id, is_new = upsert_contact(contact, owner_telegram_id=telegram_user.id, photo_bytes=photo)
     db_status = "New contact saved" if is_new else "Existing contact updated"
 
     if query.data == "confirm_send" and user:
@@ -297,7 +313,8 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     contact["email"] = [email]
 
     user = _get_registered_user(telegram_user.id)
-    contact_id, is_new = upsert_contact(contact, owner_telegram_id=telegram_user.id)
+    photo = _photos.pop(telegram_user.id, None)
+    contact_id, is_new = upsert_contact(contact, owner_telegram_id=telegram_user.id, photo_bytes=photo)
     db_status = "New contact saved" if is_new else "Existing contact updated"
     email_status = _do_send(contact, from_email=user["email"], from_name=user["display_name"])
     await update.message.reply_text(f"{db_status}. {email_status}")
